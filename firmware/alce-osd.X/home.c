@@ -19,112 +19,86 @@
 
 #include "alce-osd.h"
 
+extern struct alceosd_config config;
 
 /* data that is passed to widgets */
 struct home_data home;
 
-
 static struct home_priv {
     struct gps_coord home_coord, uav_coord;
-    unsigned char gps_fix_type;
     unsigned int altitude, home_altitude;
     int heading;
 } priv;
-
 
 struct home_data* get_home_data(void)
 {
     return &home;
 }
 
-
-static void store_mavdata(mavlink_message_t *msg, void *d)
+static void calc_home(struct timer *t, void *d)
 {
+    mavlink_heartbeat_t *hb = mavdata_get(MAVDATA_HEARTBEAT);
 
-    switch (msg->msgid) {
-        case MAVLINK_MSG_ID_VFR_HUD:
-            priv.altitude = (unsigned int) mavlink_msg_vfr_hud_get_alt(msg);
-            priv.heading = mavlink_msg_vfr_hud_get_heading(msg);
-            break;
-        case MAVLINK_MSG_ID_GPS_RAW_INT:
-            priv.uav_coord.lat = DEG2RAD(mavlink_msg_gps_raw_int_get_lat(msg) / 10000000.0);
-            priv.uav_coord.lon = DEG2RAD(mavlink_msg_gps_raw_int_get_lon(msg) / 10000000.0);
-            priv.gps_fix_type = mavlink_msg_gps_raw_int_get_fix_type(msg);
-            break;
+    mavlink_message_t this_msg;
+    
+    switch (home.lock) {
+        case HOME_NONE:
         default:
+            if (mavdata_age(MAVDATA_HEARTBEAT) > 5000)
+                return;
+
+            /* check arming status */
+            if (hb->base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+                home.lock = HOME_WAIT;
+            
             break;
-    }
-}
+        case HOME_WAIT:
+            
+            if (mavdata_age(MAVDATA_MISSION_ITEM) > 2000) {
+                /* when UAV is armed, home is WP0 */
+                mavlink_msg_mission_request_pack(config.mav.osd_sysid, MAV_COMP_ID_OSD, &this_msg,
+                                    config.mav.uav_sysid, MAV_COMP_ID_ALL, 0);
+                mavlink_send_msg(&this_msg);
+            } else {
+                mavlink_mission_item_t *mi = mavdata_get(MAVDATA_MISSION_ITEM);
+                priv.home_coord.lat = DEG2RAD(mi->x);
+                priv.home_coord.lon = DEG2RAD(mi->y);
+                priv.home_altitude = (unsigned int) mi->z;
+                home.lock = HOME_GOT;
+            }
 
-static void calc_home(void *d)
-{
-    home.uav_bearing = (int) get_bearing(&priv.home_coord, &priv.uav_coord);
+            break;
+        case HOME_GOT:
+            home.lock = HOME_LOCKED;
+            set_timer_period(t, 200);
+            break;
+        case HOME_LOCKED:
+        {
+            mavlink_global_position_int_t *gpi = mavdata_get(MAVDATA_GLOBAL_POSITION_INT);
+ 
+            priv.uav_coord.lat = DEG2RAD(gpi->lat / 10000000.0);
+            priv.uav_coord.lon = DEG2RAD(gpi->lon / 10000000.0);
+            priv.altitude = (unsigned int) (gpi->alt / 1000);
+            priv.heading = (int) (gpi->hdg / 100);
 
-    home.direction = home.uav_bearing + 180;
-    home.direction -= priv.heading;
-    if (home.direction < 0)
-        home.direction += 360;
 
-    home.distance = earth_distance(&priv.home_coord, &priv.uav_coord);
-    home.altitude = priv.altitude - priv.home_altitude;
-}
+            home.uav_bearing = (int) get_bearing(&priv.home_coord, &priv.uav_coord);
 
-extern struct alceosd_config config;
+            home.direction = home.uav_bearing + 180;
+            home.direction -= priv.heading;
+            if (home.direction < 0)
+                home.direction += 360;
 
-
-void find_home(struct timer *t, void *d)
-{
-    /* stable timer = 15 sec */
-    if (home.lock_sec < config.home_lock_sec) {
-        if (home.lock_sec == 0){
-            memcpy(&priv.home_coord, &priv.uav_coord, sizeof(struct gps_coord));
-            priv.home_altitude = priv.altitude;
+            home.distance = earth_distance(&priv.home_coord, &priv.uav_coord);
+            home.altitude = priv.altitude - priv.home_altitude;            
+            break;
         }
-
-        home.lock_sec++;
-        
-        /* GPD 2D fix */
-        if (priv.gps_fix_type > 1) {
-            home.lock |= HOME_LOCK_FIX;
-        } else {
-            home.lock &= ~HOME_LOCK_FIX;
-            home.lock_sec = 0;
-        }
-
-        /* GPS position */
-        if (home.distance <= 1) {
-            home.lock |= HOME_LOCK_POS;
-        } else {
-            home.lock &= ~HOME_LOCK_POS;
-            home.lock_sec = 0;
-        }
-
-        /* Altitude */
-        if (home.altitude <= 1) {
-            home.lock |= HOME_LOCK_ALT;
-        } else {
-            home.lock &= ~HOME_LOCK_ALT;
-            home.lock_sec = 0;
-        }
-    } else {
-        /* locked */
-        remove_timer(t);
-        home.lock |= HOME_LOCK_DONE;
     }
 }
 
 
 void init_home(void)
 {
-    home.lock = 0;
-    home.lock_sec = 0;
-
-    /* do home calculations in a 100ms interval */
-    add_timer(TIMER_ALWAYS, 1, calc_home, NULL);
-
-    /* find home position */
-    add_timer(TIMER_ALWAYS, 10, find_home, NULL);
-
-    add_mavlink_callback(MAVLINK_MSG_ID_VFR_HUD, store_mavdata, CALLBACK_PERSISTENT, NULL);
-    add_mavlink_callback(MAVLINK_MSG_ID_GPS_RAW_INT, store_mavdata, CALLBACK_PERSISTENT, NULL);
+    home.lock = HOME_NONE;
+    add_timer(TIMER_ALWAYS, 1000, calc_home, NULL);
 }

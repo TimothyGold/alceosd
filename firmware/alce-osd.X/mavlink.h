@@ -47,6 +47,8 @@ struct mavlink_callback* add_mavlink_callback_sysid(unsigned char sysid,
         void *cbk, unsigned char ctype, void *data);
 void del_mavlink_callbacks(unsigned char ctype);
 void mavlink_handle_msg(unsigned char ch, mavlink_message_t *msg);
+void mavlink_send_msg(mavlink_message_t *msg);
+void mavlink_get_targets(mavlink_message_t *msg, int *sysid, int *compid);
 
 void shell_cmd_mavlink(char *args, void *data);
 
@@ -57,6 +59,8 @@ unsigned int mavlink_msg_rc_channels_raw_get_chan(mavlink_message_t *msg, unsign
 enum {
     CALLBACK_WIDGET = 0,
     CALLBACK_PERSISTENT,
+    CALLBACK_HOME_INIT,
+    CALLBACK_WATCH,
 };
 
 enum {

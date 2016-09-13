@@ -19,19 +19,18 @@
 #ifndef HOME_H
 #define	HOME_H
 
-#define HOME_LOCK_FIX    0x01
-#define HOME_LOCK_POS    0x02
-#define HOME_LOCK_ALT    0x04
-#define HOME_LOCK_DONE   0x08
-#define HOME_LOCKED      0x0f
-
+enum {
+    HOME_NONE = 0,
+    HOME_WAIT,
+    HOME_GOT,
+    HOME_LOCKED,
+};
 
 struct home_data {
     int altitude;
     int direction, uav_bearing;
     float distance;
 
-    unsigned char lock_sec;
     unsigned char lock;
 };
 
