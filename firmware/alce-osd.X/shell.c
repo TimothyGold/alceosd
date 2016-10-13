@@ -38,11 +38,13 @@ static const struct shell_cmdmap_s root_cmdmap[] = {
     {"config", shell_cmd_cfg, "Config module", SHELL_CMD_SUBCMD},
     {"mavdata", shell_cmd_mavdata, "Mavlink data storage module", SHELL_CMD_SUBCMD},
     {"mavlink", shell_cmd_mavlink, "Mavlink module", SHELL_CMD_SUBCMD},
+    {"process", shell_cmd_process, "Process module", SHELL_CMD_SUBCMD},
     {"reboot", shell_cmd_reboot, "Reboot AlceOSD", SHELL_CMD_SIMPLE},
     {"tabs", shell_cmd_tabs, "Tabs module", SHELL_CMD_SUBCMD},
     {"uart", shell_cmd_uart, "UART module", SHELL_CMD_SUBCMD},
     {"version", shell_cmd_version, "Display firmware version", SHELL_CMD_SIMPLE},
     {"video", shell_cmd_video, "Videocore module", SHELL_CMD_SUBCMD},
+    {"widgets", shell_cmd_widgets, "Widgets module", SHELL_CMD_SUBCMD},
     {"", NULL, ""},
 };
 
