@@ -23,11 +23,13 @@
 #include "mavlink/v1.0/ardupilotmega/mavlink.h"
 
 #define MAV_SYS_ID_ANY          (0)
-#define MAV_TYPE_ALCEOSD        (27)
+#define MAV_TYPE_ALCEOSD        (MAV_TYPE_ONBOARD_CONTROLLER)
 
 struct mavlink_config {
     unsigned char streams[8];
     unsigned char uav_sysid, osd_sysid;
+    unsigned char heartbeat;
+    u8 shell_rate;
 };
 
 struct mavlink_callback {

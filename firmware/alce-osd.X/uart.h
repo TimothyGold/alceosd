@@ -47,7 +47,7 @@ enum {
     UART_CLIENT_NONE = 0,
     UART_CLIENT_MAVLINK,
     UART_CLIENT_UAVTALK,
-    UART_CLIENT_CONFIG,
+    UART_CLIENT_SHELL,
     UART_CLIENT_FRSKY,
     UART_CLIENTS,
 };
@@ -62,6 +62,12 @@ enum {
 #define UART_PROP_RX_INVERTED       2
 #define UART_PROP_HALF_DUPLEX       4
 
+#define UART_TX_BUF_SIZE    (128)
+
+struct baudrate_tbl {
+    unsigned long baudrate;
+    unsigned int brg;
+};
 
 struct uart_config {
     unsigned char mode;
@@ -90,7 +96,7 @@ struct uart_client {
 
     /* modules should use this function to send data */
     /* pointer is set by client request function */
-    void (*write)(unsigned char *buf, unsigned int len);
+    int (*write)(unsigned char *buf, unsigned int len);
 };
 
 void uart_init(void);
@@ -105,5 +111,8 @@ void uart_set_props(unsigned char port, unsigned int props);
 void uart_set_direction(unsigned char port, unsigned char direction);
 
 void shell_cmd_uart(char *args, void *data);
+
+extern const char *UART_CLIENT_NAMES[];
+extern const char *UART_PIN_NAMES[];
 
 #endif

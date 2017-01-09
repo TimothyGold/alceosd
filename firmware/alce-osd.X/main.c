@@ -126,7 +126,7 @@ void stack_dump(unsigned int *stack_pos)
     
     c = (unsigned char*) p;
     
-    snprintf(buf, 100, "\n\nStack dump :: [0x%04p--->0x%04p   0x%04p]\n\n", p, stack_pos, t);
+    snprintf(buf, 100, "\n\nStack dump :: [0x%4p--->0x%4p   0x%4p]\n\n", p, stack_pos, t);
     debug_puts(buf);
     i = 0;
     snprintf(buf, 100, "0x%4p | ", p);
@@ -294,6 +294,10 @@ void hw_init(void)
         _CNPUB6 = 1;
         _CNPUA4 = 1;
     }
+
+    /* enable all interrupts */
+    _IPL = 0;
+    _IPL3 = 1;
 }
 
 void clear_wdt(struct timer *t, void *d)
@@ -301,25 +305,29 @@ void clear_wdt(struct timer *t, void *d)
     ClrWdt();
 }
 
-int main(void) {
+int main(void)
+{
     /* generic hw init */
     hw_init();
     
     /* init uart */
     uart_init();
+    
+    /* init shell */
+    shell_init();
 
 #ifdef DEBUG_INIT
-    printf("AlceOSD hw%dv%d fw%d.%d.%d\r\n", hw_rev >> 4, hw_rev & 0xf, VERSION_MAJOR, VERSION_MINOR, VERSION_DEV);
+    shell_printf("AlceOSD hw%dv%d fw%d.%d.%d\r\n", hw_rev >> 4, hw_rev & 0xf, VERSION_MAJOR, VERSION_MINOR, VERSION_DEV);
     if (RCONbits.WDTO)
-        printf("watchdog reset\r\n");
+        shell_printf("watchdog reset\r\n");
     if (RCONbits.EXTR)
-        printf("external reset\r\n");
+        shell_printf("external reset\r\n");
     if (RCONbits.SWR)
-        printf("software reset\r\n");
+        shell_printf("software reset\r\n");
     if (RCONbits.IOPUWR)
-        printf("ill opcode / uninit W reset\r\n");
+        shell_printf("ill opcode / uninit W reset\r\n");
     if (RCONbits.WDTO)
-        printf("trap conflict reset\r\n");
+        shell_printf("trap conflict reset\r\n");
 #endif
 
     /* real time clock init */
@@ -333,6 +341,12 @@ int main(void) {
 
     /* try to load config from flash */
     config_init();
+
+    /* init mavlink module */
+    mavlink_init();
+
+    /* init mavdata */
+    mavdata_init();
 
     /* init widget modules */
     widgets_init();
@@ -348,10 +362,7 @@ int main(void) {
     
     /* init flight status tracking */
     init_flight_stats();
-
-    /* init mavlink module */
-    mavlink_init();
-
+    
     /* init uavtalk module */
     uavtalk_init();
     
@@ -361,14 +372,11 @@ int main(void) {
     /* link serial ports to processes */
     uart_set_config_clients();
 
-    /* enable all interrupts */
-    _IPL = 0;
-    _IPL3 = 1;
     /* add watchdog timer */
     add_timer(TIMER_ALWAYS, 60000, clear_wdt, NULL);
 
-    console_printf("Processes running...\n");
     /* main loop */
+    console_printf("Processes running...\n");
     process_run();
 
     return 0;

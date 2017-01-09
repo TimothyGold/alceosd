@@ -19,6 +19,7 @@
 #ifndef VIDEOCORE_H
 #define	VIDEOCORE_H
 
+#include "alce-types.h"
 
 enum {
     VIDEO_XSIZE_420 = 0,
@@ -33,13 +34,12 @@ enum {
     VIDEO_STANDARD_PAL_I  = 1,
     VIDEO_STANDARD_NTSC_P = 2,
     VIDEO_STANDARD_NTSC_I = 3,
-    VIDEO_STANDARD_END    = 8,
+    VIDEO_STANDARD_END    = 4,
 };
 
 #define VIDEO_MODE_SCAN_MASK        (0x01)
 #define VIDEO_MODE_STANDARD_MASK    (0x02)
 #define VIDEO_MODE_SYNC_MASK        (0x04)
-#define VIDEO_MODE_INPUT_MASK       (0x08)
 
 #define VIDEO_ACTIVE_CONFIG         0xff
 
@@ -70,9 +70,11 @@ struct canvas {
     unsigned int size;
     __eds__ unsigned char *buf;
     unsigned char lock;
+    
+    u8 buf_nr;
 };
 
-struct video_config {
+struct video_config_profile {
     /* video standard and scan */
     unsigned char mode;
     /* video X resolution id */
@@ -83,6 +85,18 @@ struct video_config {
     unsigned int x_offset;
     /* video Y resolution */
     unsigned int y_offset;
+};
+
+typedef union {
+    u8 raw;
+    struct  {
+        unsigned vref:5;
+        unsigned source:1;
+        unsigned :2;
+    };
+} video_ctrl_t;
+
+struct video_config {
     /* video brightness */
     unsigned int brightness;
 
@@ -90,17 +104,20 @@ struct video_config {
     unsigned char white_lvl;
     unsigned char gray_lvl;
     unsigned char black_lvl;
+    
+    /* input source and comparator reference */
+    video_ctrl_t ctrl;
 };
-
 
 
 void init_video(void);
 
 /* canvas related functions */
 int alloc_canvas(struct canvas *ca, void *widget_cfg);
+void free_canvas(struct canvas *c);
+void reconfig_canvas(struct canvas *ca, void *widget_cfg);
 int init_canvas(struct canvas *ca);
 void schedule_canvas(struct canvas *ca);
-void render_canvas(struct canvas *ca);
 void free_mem(void);
 
 /* clear up display */
@@ -116,4 +133,5 @@ void video_resume(void);
 
 void shell_cmd_video(char *args, void *data);
 
+extern const struct osd_xsize_tbl video_xsizes[];
 #endif

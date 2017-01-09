@@ -1,6 +1,6 @@
 /*
     AlceOSD - Graphical OSD
-    Copyright (C) 2015  Luis Alves
+    Copyright (C) 2016  Luis Alves
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -32,7 +32,7 @@ static int open(struct widget *w)
 {
     w->ca.width = X_SIZE;
     w->ca.height = Y_SIZE;
-    add_timer(TIMER_WIDGET, 500, render_timer, w);
+    add_timer(TIMER_WIDGET, 1000, render_timer, w);
     return 0;
 }
 
@@ -40,18 +40,24 @@ static void render(struct widget *w)
 {
     struct canvas *ca = &w->ca;
     char buf[10];
-    mavlink_rangefinder_t *rfinder = mavdata_get(MAVLINK_MSG_ID_RANGEFINDER);
-    float distance = rfinder->distance;
+    mavlink_scaled_pressure_t *sp = mavdata_get(MAVLINK_MSG_ID_SCALED_PRESSURE);
+    float temperature = sp->temperature / 100.0;
+    char unit_char = 'C';
 
-    sprintf(buf, "%.2fm", (double) distance);
+    if (get_units(w->cfg) == UNITS_IMPERIAL) {
+        temperature = temperature * 1.8 + 32;
+        unit_char = 'F';
+    }
+    
+    sprintf(buf, "%.2f%c", (double) temperature, unit_char);
     draw_jstr(buf, X_SIZE, Y_SIZE/2, JUST_RIGHT | JUST_VCENTER, ca, 2);
 }
 
 
-const struct widget_ops sonar_widget_ops = {
-    .name = "Range Finder",
-    .mavname = "SONAR",
-    .id = WIDGET_SONAR_ID,
+const struct widget_ops temperature_widget_ops = {
+    .name = "Temperature",
+    .mavname = "TEMPER",
+    .id = WIDGET_TEMPERATURE_ID,
     .init = NULL,
     .open = open,
     .render = render,

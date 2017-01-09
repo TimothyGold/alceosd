@@ -46,10 +46,11 @@
 #include "process.h"
 #include "shell.h"
 #include "mavdata.h"
+#include "alce-types.h"
 
 
 #define VERSION_MAJOR   0
-#define VERSION_MINOR   11
+#define VERSION_MINOR   12
 #define VERSION_DEV     0
 
 #define WITH_BOOTLOADER
@@ -68,9 +69,8 @@ typedef union {
     unsigned char b[4];
 } u32union __attribute__((aligned(2)));
 
-
 extern void console_print(char *str);
 extern int console_printf(const char *fmt, ...);
+extern unsigned char hw_rev;
 
 #endif	/* ALCE_OSD_H */
-

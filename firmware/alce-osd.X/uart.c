@@ -21,10 +21,6 @@
 #define UART_PROCESS_PRIO   50
 #define UART_FIFO_MASK      0x3ff
 
-#define DMA_BUF_SIZE    (128)
-
-extern struct alceosd_config config;
-extern unsigned char hw_rev;
 
 const struct uart_regs {
     volatile unsigned int *BRG;
@@ -91,12 +87,7 @@ const struct param_def params_uart34[] = {
 };
 
 
-struct baudrate_tbl {
-    unsigned long baudrate;
-    unsigned int brg;
-};
-
-static const struct baudrate_tbl baudrates[] = {
+const struct baudrate_tbl baudrates[] = {
     { .baudrate = 19200,  .brg = 227 },
     { .baudrate = 57600,  .brg = 76 },
     { .baudrate = 115200, .brg = 37 },
@@ -129,16 +120,18 @@ struct uart_fifo_s {
     
     __eds__ unsigned char *tx_buf;
     unsigned int full;
+    
+    u32 rx, tx;
 };
 
 static struct uart_fifo_s uart_fifo[4];
 
 
 /* tx dma buffers */
-__eds__ unsigned char tx_buf1[DMA_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-DMA_BUF_SIZE)));
-__eds__ unsigned char tx_buf2[DMA_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-(DMA_BUF_SIZE*2))));
-__eds__ unsigned char tx_buf3[DMA_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-(DMA_BUF_SIZE*3))));
-__eds__ unsigned char tx_buf4[DMA_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-(DMA_BUF_SIZE*4))));
+__eds__ unsigned char tx_buf1[UART_TX_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-UART_TX_BUF_SIZE)));
+__eds__ unsigned char tx_buf2[UART_TX_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-(UART_TX_BUF_SIZE*2))));
+__eds__ unsigned char tx_buf3[UART_TX_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-(UART_TX_BUF_SIZE*3))));
+__eds__ unsigned char tx_buf4[UART_TX_BUF_SIZE] __attribute__((eds,space(dma),address(0x6000-(UART_TX_BUF_SIZE*4))));
 
 
 static const char keywords[] = "I want to enter AlceOSD setup";
@@ -183,7 +176,7 @@ inline static void handle_uart_int(unsigned char port)
 {
     unsigned int n_wr = uart_fifo[port].wr;
     unsigned char ch;
-    //unsigned int cnt = 0;
+    u8 cnt = 0;
 
     /* if set, clear overflow bit */
     if (*(UARTS[port].STA) & 2) {
@@ -191,16 +184,16 @@ inline static void handle_uart_int(unsigned char port)
         uart_fifo[port].overflow++;
     }
 
-    //while (*(UARTS[port].STA) & 1) {
+    while (*(UARTS[port].STA) & 1) {
         n_wr = (n_wr + 1) & UART_FIFO_MASK;
         
         ch = *(UARTS[port].RX);
         if (keywords[key_idx[port]] == ch) {
             key_idx[port]++;
             if (key_idx[port] == (sizeof(keywords)-1)) {
-                if (uart_get_client(port)->id == UART_CLIENT_CONFIG)
+                if (uart_get_client(port)->id == UART_CLIENT_SHELL)
                     return;
-                uart_set_client(port, UART_CLIENT_CONFIG, 1);
+                uart_set_client(port, UART_CLIENT_SHELL, 1);
                 uart_get_client(port)->write((unsigned char*) answer, sizeof(answer)-1);
                 //while ( (*(UARTS[port].STA) & 0x0100) == 0);
                 uart_fifo[port].rd = uart_fifo[port].wr;
@@ -225,9 +218,10 @@ inline static void handle_uart_int(unsigned char port)
         
         uart_fifo[port].max = max(uart_fifo[port].max, (uart_fifo[port].wr - uart_fifo[port].rd) & UART_FIFO_MASK);
         
-        //cnt++;
-    //}
-    //uart_fifo[port].m = max(uart_fifo[port].m, cnt);
+        cnt++;
+    }
+    uart_fifo[port].m = max(uart_fifo[port].m, cnt);
+    uart_fifo[port].rx += (u32) cnt;
 }
 
 void __attribute__((__interrupt__, auto_psv)) _U1RXInterrupt(void)
@@ -321,11 +315,6 @@ static void uart_init_(unsigned char port)
 {
     uart_set_baudrate(port, UART_BAUD_115200);
     
-    /* clear status reg */
-    *(UARTS[port].STA) = 0;
-    /* enable */
-    *(UARTS[port].MODE) = 0x8000;
-    
     switch (port) {
         case UART_PORT1:
             _U1RXIP = 1;
@@ -375,8 +364,10 @@ static void uart_init_(unsigned char port)
             break;
     }
     
-    /* enable TX */
-    *(UARTS[port].STA) |= 0x0400;
+    /* enable uart */
+    *(UARTS[port].MODE) = 0x8000;
+    /* enable tx */
+    *(UARTS[port].STA)  = 0x0400;
 }
 
 static unsigned int uart_read(unsigned char port, unsigned char **buf)
@@ -403,88 +394,100 @@ static inline void uart_discard(unsigned char port, unsigned int count)
     uart_fifo[port].rd &= UART_FIFO_MASK;
 }
 
-void uart1_write(unsigned char *buf, unsigned int len)
+static int uart1_write(unsigned char *buf, unsigned int len)
 {
     __eds__ unsigned char *b = tx_buf1;
     
     if (len == 0)
-        return;
+        return 0;
     
     if (U1STAbits.TRMT == 0) {
         uart_fifo[0].full++;
-        while (U1STAbits.TRMT == 0);
+        return 1;
+        //while (U1STAbits.TRMT == 0);
     }
 
-    len = min(len, DMA_BUF_SIZE);
+    len = min(len, UART_TX_BUF_SIZE);
+    uart_fifo[0].tx += (u32) len;
     DMA0CNT = len - 1;
     while (len-- > 0)
         *b++ = *buf++;
 
     DMA0CONbits.CHEN = 1;
     DMA0REQbits.FORCE = 1;
+    return 0;
 }
 
-void uart2_write(unsigned char *buf, unsigned int len)
+static int uart2_write(unsigned char *buf, unsigned int len)
 {
     __eds__ unsigned char *b = tx_buf2;
     
     if (len == 0)
-        return;
+        return 0;
     
     if (U2STAbits.TRMT == 0) {
         uart_fifo[1].full++;
-        while (U2STAbits.TRMT == 0);
+        return 1;
+        //while (U2STAbits.TRMT == 0);
     }
 
-    len = min(len, DMA_BUF_SIZE);
+    len = min(len, UART_TX_BUF_SIZE);
+    uart_fifo[1].tx += (u32) len;
     DMA1CNT = len - 1;
     while (len-- > 0)
         *b++ = *buf++;
 
     DMA1CONbits.CHEN = 1;
     DMA1REQbits.FORCE = 1;
+    return 0;
 }
 
-static void uart3_write(unsigned char *buf, unsigned int len)
+static int uart3_write(unsigned char *buf, unsigned int len)
 {
     __eds__ unsigned char *b = tx_buf3;
     
     if (len == 0)
-        return;
+        return 0;
     
     if (U3STAbits.TRMT == 0) {
         uart_fifo[2].full++;
-        while (U3STAbits.TRMT == 0);
+        return 1;
+        //while (U3STAbits.TRMT == 0);
     }
 
-    len = min(len, DMA_BUF_SIZE);
+    len = min(len, UART_TX_BUF_SIZE);
+    uart_fifo[2].tx += (u32) len;
     DMA2CNT = len - 1;
     while (len-- > 0)
         *b++ = *buf++;
 
     DMA2CONbits.CHEN = 1;
     DMA2REQbits.FORCE = 1;
+    return 0;
 }
 
-void uart4_write(unsigned char *buf, unsigned int len)
+static int uart4_write(unsigned char *buf, unsigned int len)
 {
     __eds__ unsigned char *b = tx_buf4;
     
     if (len == 0)
-        return;
+        return 0;
     
     if (U4STAbits.TRMT == 0) {
         uart_fifo[3].full++;
-        while (U4STAbits.TRMT == 0);
+        return 1;
+        //while (U4STAbits.TRMT == 0);
     }
 
-    len = min(len, DMA_BUF_SIZE);
+    len = min(len, UART_TX_BUF_SIZE);
+    uart_fifo[3].tx += (u32) len;
     DMA3CNT = len - 1;
     while (len-- > 0)
         *b++ = *buf++;
 
     DMA3CONbits.CHEN = 1;
     DMA3REQbits.FORCE = 1;
+    return 0;
 }
 
 unsigned char uart_getc(unsigned char port, char *c)
@@ -512,20 +515,20 @@ int __attribute__((__weak__, __section__(".libc"))) write(int handle, void *buf,
 }
 #endif
 
-inline static int uart_process(unsigned char port)
+inline static void uart_process(unsigned char port)
 {
     unsigned char *b;
-    unsigned int len;
+    u16 avail, len;
 
     if (port_clients[port] == NULL)
-        return 0;
+        return;
     
-    len = uart_read(port, &b);
-    while (len > 0) {
-        len = port_clients[port]->read(port_clients[port], b, len);
-        uart_discard(port, len);
-        len = uart_read(port, &b);
-    }
+    avail = uart_read(port, &b);
+    if (avail == 0)
+        return;
+
+    len = port_clients[port]->read(port_clients[port], b, avail);
+    uart_discard(port, len);
 }
 
 static void uart1_process(void)
@@ -639,7 +642,6 @@ void uart_set_client(unsigned char port, unsigned char client_id,
 {
     struct uart_client **clist = uart_client_list;
     struct uart_client **c = &port_clients[port];
-    extern int __C30_UART;
     unsigned char i;
 
     if (port > 3)
@@ -673,8 +675,6 @@ void uart_set_client(unsigned char port, unsigned char client_id,
                 }
             }
             
-            if (client_id == UART_CLIENT_CONFIG)
-                __C30_UART = port+1;
             *c = *clist;
             switch (port) {
                 case UART_PORT1:
@@ -695,6 +695,11 @@ void uart_set_client(unsigned char port, unsigned char client_id,
             (*c)->port = port;
             if ((*c)->init != NULL)
                 (*c)->init(*c);
+            
+            *(UARTS[port].STA) &= ~0x00c0;
+            if (client_id == UART_CLIENT_MAVLINK)
+                *(UARTS[port].STA) |= 0x00c0;
+
             break;
         }
         clist++;
@@ -801,7 +806,7 @@ static void shell_cmd_stats(char *args, void *data)
     unsigned char i, total = 0;
     struct uart_client **cli;
     
-    shell_printf("\nPort settings (config):\n");
+    shell_printf("Port settings (config):\n");
     for (i = 0; i < 4; i++) {
         shell_printf(" port%d: %6lubps pins=%-9s client=%s\n",
                 i, baudrates[config.uart[i].baudrate].baudrate,
@@ -832,7 +837,8 @@ static void shell_cmd_stats(char *args, void *data)
     
     shell_printf("\nStats:\n");
     for (i = 0; i < 4; i++) {
-        shell_printf(" port%d: overrun=%u overflows=%u fulls=%d loops=%d max=%u\n", i,
+        shell_printf(" port%d: tx=%lu rx=%lu", i, uart_fifo[i].tx, uart_fifo[i].rx);
+        shell_printf(" orun=%u oflow=%u txfull=%u (rxloop=%u max=%u)\n",
                 uart_fifo[i].overrun, uart_fifo[i].overflow, uart_fifo[i].full,
                 uart_fifo[i].m, uart_fifo[i].max);
         uart_fifo[i].m = 0;
@@ -854,7 +860,7 @@ static void shell_cmd_config(char *args, void *data)
     p = shell_get_argval(argval, 'p');
 
     if ((t < 2) || (p == NULL)) {
-        shell_printf("\nsyntax: -p <port> [-n] [-b <baudrate>] [-c <client>] [-i <pins>]\n");
+        shell_printf("syntax: -p <port> [-n] [-b <baudrate>] [-c <client>] [-i <pins>]\n");
         shell_printf(" -p <port>      uart port number: 0 to 3\n");
         shell_printf(" -n             apply changes now\n");
         shell_printf(" -b <baudrate>  baudrate:");
@@ -871,7 +877,7 @@ static void shell_cmd_config(char *args, void *data)
         now = shell_get_argval(argval, 'n');
         port = atoi(p->val);
         if ((port < 0) || (port >= UART_PORTS)) {
-            shell_printf("\nerror: invalid port '%d'\n", port);
+            shell_printf("error: invalid port '%d'\n", port);
             return;
         }
         p = shell_get_argval(argval, 'b');
@@ -886,7 +892,7 @@ static void shell_cmd_config(char *args, void *data)
                 }
             }
             if (i == UART_BAUDRATES) {
-                shell_printf("\nerror: invalid baudrate '%lu'\n", baud);
+                shell_printf("error: invalid baudrate '%lu'\n", baud);
                 return;
             }
         }
@@ -901,7 +907,7 @@ static void shell_cmd_config(char *args, void *data)
                 }
             }
             if (i == UART_CLIENTS) {
-                shell_printf("\nerror: invalid client '%s'\n", p->val);
+                shell_printf("error: invalid client '%s'\n", p->val);
                 return;
             }
         }
@@ -916,9 +922,15 @@ static void shell_cmd_config(char *args, void *data)
                 }
             }
             if (i == UART_PINS) {
-                shell_printf("\nerror: invalid pins '%s'\n", p->val);
+                shell_printf("error: invalid pins '%s'\n", p->val);
                 return;
             }
+        }
+        p = shell_get_argval(argval, 'x');
+        if (p != NULL) {
+            u16 v = atoi(p->val) & 3;
+            *(UARTS[port].STA) &= ~0x00c0;
+            *(UARTS[port].STA) |= (v << 6);
         }
     }
 }

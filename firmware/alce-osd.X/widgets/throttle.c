@@ -18,19 +18,20 @@
 
 #include "alce-osd.h"
 
-#define X_SIZE  8
+#define X_SIZE  12
 #define Y_SIZE  45
 
 struct widget_priv {
     unsigned char throttle, last_throttle;
 };
 
-static void mav_callback(mavlink_message_t *msg, void *d)
+static void render_timer(struct timer *t, void *d)
 {
     struct widget *w = d;
     struct widget_priv *priv = w->priv;
+    mavlink_vfr_hud_t *vfr_hud = mavdata_get(MAVLINK_MSG_ID_VFR_HUD);
 
-    priv->throttle = (unsigned char) mavlink_msg_vfr_hud_get_throttle(msg);
+    priv->throttle = (unsigned char) vfr_hud->throttle;
     if (priv->throttle ==  priv->last_throttle)
         return;
 
@@ -51,7 +52,7 @@ static int open(struct widget *w)
     priv->last_throttle = 0xff;
     w->ca.width = X_SIZE;
     w->ca.height = Y_SIZE;
-    add_mavlink_callback(MAVLINK_MSG_ID_VFR_HUD, mav_callback, CALLBACK_WIDGET, w);
+    add_timer(TIMER_WIDGET, 250, render_timer, w);
     return 0;
 }
 
@@ -60,12 +61,15 @@ static void render(struct widget *w)
     struct widget_priv *priv = w->priv;
     struct canvas *ca = &w->ca;
     unsigned v = priv->throttle * (Y_SIZE-4) / 100;
+    char buf[5];
     
     draw_rect(0, 0, X_SIZE-1, Y_SIZE-1, 3, ca);
     draw_rect(1, 1, X_SIZE-2, Y_SIZE-2, 1, ca);
     if (priv->throttle > 0) {
-        draw_frect(2, Y_SIZE-3 - v, X_SIZE-3, Y_SIZE-3, 1, ca);
+        draw_frect(2, Y_SIZE-3 - v, X_SIZE-3, Y_SIZE-3, 2, ca);
     }
+    snprintf(buf, 5, "%d", priv->throttle);
+    draw_jstr(buf, X_SIZE/2, Y_SIZE/2, JUST_HCENTER|JUST_VCENTER, ca, 0);
 }
 
 

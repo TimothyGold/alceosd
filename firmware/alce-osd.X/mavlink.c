@@ -18,7 +18,9 @@
 
 #include "alce-osd.h"
 
-#define MAX_MAVLINK_CALLBACKS 40
+#define MAX_TX_WAIT_TIME    100
+
+#define MAX_MAVLINK_CALLBACKS 20
 #define MAX_MAVLINK_ROUTES 10
 
 #define UAV_LAST_SEEN_TIMEOUT   2000
@@ -43,6 +45,7 @@ extern struct alceosd_config config;
 const struct param_def params_mavlink[] = {
     PARAM("MAV_UAVSYSID", MAV_PARAM_TYPE_UINT8, &config.mav.uav_sysid, NULL),
     PARAM("MAV_OSDSYSID", MAV_PARAM_TYPE_UINT8, &config.mav.osd_sysid, NULL),
+    PARAM("MAV_HRTBEAT", MAV_PARAM_TYPE_UINT8, &config.mav.heartbeat, NULL),
     PARAM_END,
 };
 
@@ -55,6 +58,8 @@ const struct param_def params_mavlink_rates[] = {
     PARAM("MAV_EXTRA1",   MAV_PARAM_TYPE_UINT8, &config.mav.streams[5], NULL),
     PARAM("MAV_EXTRA2",   MAV_PARAM_TYPE_UINT8, &config.mav.streams[6], NULL),
     PARAM("MAV_EXTRA3",   MAV_PARAM_TYPE_UINT8, &config.mav.streams[7], NULL),
+
+    PARAM("MAV_SHELL",   MAV_PARAM_TYPE_UINT8, &config.mav.shell_rate, NULL),
     PARAM_END,
 };
 
@@ -292,12 +297,18 @@ static void mavlink_send_msg_to_channels(unsigned char ch_mask, mavlink_message_
     unsigned char i;
     unsigned int len;
     unsigned char buf[MAVLINK_MAX_PACKET_LEN];
+    u16 t;
 
     len = mavlink_msg_to_send_buffer(buf, msg);
     
     for (i = 0; i < MAVLINK_COMM_NUM_BUFFERS; i++) {
-        if (ch_mask & 1)
-            mavlink_uart_clients[i].write(buf, len);
+        if (ch_mask & 1) {
+            t = get_millis16();
+            while ((get_millis16() - t) < MAX_TX_WAIT_TIME) {
+                if (mavlink_uart_clients[i].write(buf, len) == 0)
+                    break;
+            }
+        }
         ch_mask = ch_mask >> 1;
         if (ch_mask == 0)
             break;
@@ -340,7 +351,7 @@ static void mavlink_learn_route(unsigned char ch, mavlink_message_t *msg)
         //}
         total_routes++;
 #ifdef ROUTING_DEBUG
-        printf("learned route %u %u via %u\n",
+        shell_printf("learned route %u %u via %u\n",
                  (unsigned)msg->sysid, 
                  (unsigned)msg->compid,
                  (unsigned)ch);
@@ -495,7 +506,7 @@ static void mav_heartbeat(struct timer *t, void *d)
     mavlink_message_t msg;
     struct timer *led_timer = d;
 
-    if (mavdata_age(MAVDATA_HEARTBEAT) > UAV_LAST_SEEN_TIMEOUT) {
+    if (mavdata_age(MAVLINK_MSG_ID_HEARTBEAT) > UAV_LAST_SEEN_TIMEOUT) {
         set_timer_period(t, 5000);
         set_timer_period(led_timer, 500);
     } else {
@@ -551,7 +562,7 @@ void mav_param_request_list(mavlink_message_t *msg, void *d)
     
     pidx = 0;
     total_params = params_get_total();
-    add_timer(TIMER_ALWAYS, 100, send_param_list_cbk, d);
+    add_timer(TIMER_ALWAYS, 50, send_param_list_cbk, d);
 
     console_printf("plist:sysid=%d compid=%d\n", sys, comp);
 }
@@ -643,7 +654,7 @@ static void mavlink_request_data_streams(struct timer *t, void *d)
 {
     unsigned char i;
     
-    if (mavdata_age(MAVDATA_HEARTBEAT) > UAV_LAST_SEEN_TIMEOUT)
+    if (mavdata_age(MAVLINK_MSG_ID_HEARTBEAT) > UAV_LAST_SEEN_TIMEOUT)
         return;
     
     for (i = 1; i < sizeof(mavlink_stream_map); i++)
@@ -658,6 +669,19 @@ void mav_cmd_ack(mavlink_message_t *msg, void *d)
     shell_printf("cmd %d ack %d\n", c, r);
 }
 #endif
+
+void mav_detect_uav_sysid(mavlink_message_t *msg, void *d)
+{
+    if (mavlink_msg_heartbeat_get_autopilot(msg) == MAV_AUTOPILOT_INVALID)
+        return;
+
+    if ((mavlink_msg_heartbeat_get_type(msg) == MAV_TYPE_GIMBAL) ||
+        (mavlink_msg_heartbeat_get_type(msg) == MAV_TYPE_GCS))
+        return;
+    
+    config.mav.uav_sysid = msg->sysid;
+    del_mavlink_callback((struct mavlink_callback*) d);
+}
 
 void mavlink_init(void)
 {
@@ -682,12 +706,22 @@ void mavlink_init(void)
     /* LED heartbeat timer */
     t = add_timer(TIMER_ALWAYS, 1000, mav_heartbeat_blink, NULL);
     /* heartbeat timer */
-    add_timer(TIMER_ALWAYS, 1000, mav_heartbeat, t);
+    if (config.mav.heartbeat)
+        add_timer(TIMER_ALWAYS, 1000, mav_heartbeat, t);
 
+    if (config.mav.uav_sysid == 0) {
+        struct mavlink_callback *c = add_mavlink_callback_sysid(MAV_SYS_ID_ANY,
+                MAVLINK_MSG_ID_HEARTBEAT, mav_detect_uav_sysid, CALLBACK_PERSISTENT, NULL);
+        c->data = (void*) c;
+    }
+    
     /* parameter request handlers */
-    add_mavlink_callback_sysid(MAV_SYS_ID_ANY, MAVLINK_MSG_ID_PARAM_REQUEST_LIST, mav_param_request_list, CALLBACK_PERSISTENT, NULL);
-    add_mavlink_callback_sysid(MAV_SYS_ID_ANY, MAVLINK_MSG_ID_PARAM_REQUEST_READ, mav_param_request_read, CALLBACK_PERSISTENT, NULL);
-    add_mavlink_callback_sysid(MAV_SYS_ID_ANY, MAVLINK_MSG_ID_PARAM_SET, mav_param_set, CALLBACK_PERSISTENT, NULL);
+    add_mavlink_callback_sysid(MAV_SYS_ID_ANY, MAVLINK_MSG_ID_PARAM_REQUEST_LIST,
+                mav_param_request_list, CALLBACK_PERSISTENT, NULL);
+    add_mavlink_callback_sysid(MAV_SYS_ID_ANY, MAVLINK_MSG_ID_PARAM_REQUEST_READ,
+                mav_param_request_read, CALLBACK_PERSISTENT, NULL);
+    add_mavlink_callback_sysid(MAV_SYS_ID_ANY, MAVLINK_MSG_ID_PARAM_SET,
+                mav_param_set, CALLBACK_PERSISTENT, NULL);
 
     /* request stream rates periodically */
     add_timer(TIMER_ALWAYS, 60000, mavlink_request_data_streams, NULL);
@@ -701,10 +735,10 @@ static void shell_cmd_callbacks(char *args, void *data)
     unsigned char i, t = 0;
     struct mavlink_callback *c = callbacks;
 
-    shell_printf("\n\nMavlink callbacks:\n");
+    shell_printf("Mavlink callbacks:\n");
     for (i = 0; i < nr_callbacks; i++) {
         if (c->cbk != NULL) {
-            printf(" type=%d sysid=%3d msgid=%3d cbk=%p data=%p\n",
+            shell_printf(" type=%d sysid=%3d msgid=%3d cbk=%p data=%p\n",
                         c->type, c->sysid, c->msgid, c->cbk, c->data);
             t++;
         }
@@ -720,21 +754,21 @@ static void shell_cmd_stats(char *args, void *data)
 
     for (i = 0; i < MAVLINK_COMM_NUM_BUFFERS; i++) {
         status = mavlink_get_channel_status(i);
-        shell_printf("\nMavlink channel %d\n", i);
-        shell_printf(" parse errors=%d\n", status->parse_error);
-        shell_printf(" buffer_overrun=%d\n", status->buffer_overrun);
-        shell_printf(" packet_rx_drop_count=%d\n", status->packet_rx_drop_count);
-        shell_printf(" packet_rx_success_count=%d\n", status->packet_rx_success_count);
+        shell_printf("\nMavlink channel %u\n", i);
+        shell_printf(" parse errors=%u\n", status->parse_error);
+        shell_printf(" buffer_overrun=%u\n", status->buffer_overrun);
+        shell_printf(" packet_rx_drop_count=%u\n", status->packet_rx_drop_count);
+        shell_printf(" packet_rx_success_count=%u\n", status->packet_rx_success_count);
     }
     shell_printf("\nActive channel mask=%x\n", active_channel_mask);
-    shell_printf("\nUAV last seen %lums ago\n", mavdata_age(MAVDATA_HEARTBEAT));
+    shell_printf("\nUAV last seen %lums ago\n", mavdata_age(MAVLINK_MSG_ID_HEARTBEAT));
 }
 
 static void shell_cmd_route(char *args, void *data)
 {
     unsigned char i;
     
-    shell_printf("\nMavlink routing table:\n");
+    shell_printf("Mavlink routing table:\n");
     for(i = 0; i < total_routes; i++) {
         shell_printf(" sysid(%3u) compid(%3u) on channel(%u)\n",
                 (unsigned) routes[i].sysid, 
@@ -756,7 +790,7 @@ static void shell_cmd_rates(char *args, void *data)
     p = shell_get_argval(argval, 's');
 
     if ((t < 2) || (p == NULL)) {
-        shell_printf("\nMavlink stream rates:\n");
+        shell_printf("Mavlink stream rates:\n");
         shell_printf("id - rate stream\n");
         for (i = 0; i < sizeof(mavlink_stream_map)-1; i++) {
             v = (unsigned char*) params_mavlink_rates[i].value;
@@ -771,13 +805,13 @@ static void shell_cmd_rates(char *args, void *data)
         if (p != NULL) {
             i = atoi(p->val);
             if (i > sizeof(mavlink_stream_map)) {
-                shell_printf("\nInvalid stream id\n");
+                shell_printf("Invalid stream id\n");
             } else {
                 p = shell_get_argval(argval, 'r');
                 val = atoi(p->val);
                 if (val > 20)
                     val = 0;
-                shell_printf("\nSetting stream id %u to %uHz\n", i, val);
+                shell_printf("Setting stream id %u to %uHz\n", i, val);
                 mavlink_request_data_stream(i, val);
             }
         }
@@ -812,13 +846,13 @@ static void shell_cmd_watch(char *args, void *data)
     p = shell_get_argval(argval, 'r');
     if (p != NULL) {
         del_mavlink_callbacks(CALLBACK_WATCH);
-        shell_printf("\nRemoved all watches\n");
+        shell_printf("Removed all watches\n");
         return;
     }
     
     p = shell_get_argval(argval, 'i');
     if ((t < 1) || (p == NULL)) {
-        shell_printf("\nMavlink watch:\n");
+        shell_printf("Mavlink watch:\n");
         
         shell_printf("\nwatch mavlink messages: [-i <msgid> -o <output>]\n");
         shell_printf(" -r          remove watches\n");
@@ -826,7 +860,7 @@ static void shell_cmd_watch(char *args, void *data)
         //shell_printf(" -o <msgid>  output (0=shell; 1=console widget)\n");
     } else {
         i = atoi(p->val);
-        shell_printf("\nCreated watch for msgid=%d\n", i);
+        shell_printf("Created watch for msgid=%d\n", i);
         add_mavlink_callback_sysid(MAV_SYS_ID_ANY, i, watch_cbk, CALLBACK_WATCH, NULL);
     } 
 }
@@ -834,7 +868,7 @@ static void shell_cmd_watch(char *args, void *data)
 #define SHELL_CMD_CMD_ARGS 5
 static void shell_cmd_cmd(char *args, void *data)
 {
-    struct shell_argval argval[SHELL_CMD_CMD_ARGS+1], *p;
+    struct shell_argval argval[SHELL_CMD_CMD_ARGS+1];
     mavlink_message_t this_msg;
     unsigned char t;
     unsigned int cmd;
@@ -842,14 +876,60 @@ static void shell_cmd_cmd(char *args, void *data)
     t = shell_arg_parser(args, argval, SHELL_CMD_CMD_ARGS);
     
     cmd = atoi(args);
-    shell_printf("\nsending command %d\n", cmd);
+    shell_printf("sending command %d\n", cmd);
     mavlink_msg_command_long_pack(config.mav.osd_sysid, MAV_COMP_ID_OSD, &this_msg, config.mav.uav_sysid, MAV_COMP_ID_ALL,
         cmd, 0, 0, 0, 0, 0, 0, 0, 0);
     mavlink_send_msg(&this_msg);
 }
 
+#define SHELL_CMD_MAVCONFIG_ARGS    3
+static void shell_cmd_config(char *args, void *data)
+{
+    struct shell_argval argval[SHELL_CMD_MAVCONFIG_ARGS+1];
+    unsigned char t, i, val;
+    
+    t = shell_arg_parser(args, argval, SHELL_CMD_MAVCONFIG_ARGS);
+    if (t < 1) {
+        shell_printf("Mavlink setup:\n");
+        shell_printf(" AlceOSD Heartbeat: %s\n",
+                config.mav.heartbeat ? "on" : "off");
+        shell_printf(" AlceOSD SYS_ID: %u\n", config.mav.osd_sysid);
+        shell_printf(" UAV SYS_ID: %u\n", config.mav.uav_sysid);
+        
+        shell_printf("\noptions:\n");
+        shell_printf(" -i <osd_sysid>  AlceOSD mavlink system ID\n");
+        shell_printf(" -u <uav_sysid>  UAV mavlink system ID (0 = auto-detect)\n");
+        shell_printf(" -h <heartbeat>  Enable of disable AlceOSD mavlink heartbeat (0 or 1)\n");
+    } else {
+        for (i = 0; i < t; i++) {
+            val = atoi(argval[i].val);
+            switch (argval[i].key) {
+                case 'i':
+                    val = TRIM(val, 0, 255);
+                    config.mav.osd_sysid = val;
+                    shell_printf("AlceOSD sysid = %u\n", val);
+                    break;
+                case 'u':
+                    val = TRIM(val, 0, 255);
+                    config.mav.uav_sysid = val;
+                    shell_printf("UAV sysid = %u\n", val);
+                    break;
+                case 'h':
+                    val = TRIM(val, 0, 1);
+                    config.mav.heartbeat = (u8) val;
+                    shell_printf("AlceOSD mavlink heartbeat = %u\n", val);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
+
+
 static const struct shell_cmdmap_s mavlink_cmdmap[] = {
     {"callbacks", shell_cmd_callbacks, "Display callback info", SHELL_CMD_SIMPLE},
+    {"config", shell_cmd_config, "Config mavlink parameters", SHELL_CMD_SIMPLE},
     {"rates", shell_cmd_rates, "Mavlink stream rates", SHELL_CMD_SIMPLE},
     {"route", shell_cmd_route, "Display routing table", SHELL_CMD_SIMPLE},
     {"stats", shell_cmd_stats, "Display statistics", SHELL_CMD_SIMPLE},

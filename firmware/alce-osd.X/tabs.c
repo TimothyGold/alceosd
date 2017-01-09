@@ -105,7 +105,7 @@ void load_tab(unsigned char tab)
     DTABS("Loaded\n");
 }
 
-static void build_tab_list(void)
+void build_tab_list(void)
 {
     struct widget_config *wcfg = &config.widgets[0];
     unsigned char *p = &tab_list[1];
@@ -147,11 +147,12 @@ static void tab_switch_task(struct timer *t, void *d)
     static unsigned char prev_val = 255, active_tab_idx = 0, source_mode = 0xff;
     struct ch_switch *cfg = d;
     unsigned int val;
+    u32 ch_age;
     
     switch (cfg->mode) {
         case SW_MODE_CHANNEL:
         default:
-            val = get_sw_state(cfg);
+            val = get_sw_state(cfg, &ch_age);
             val = ((val * tab_list[0]) / 101) + 1;
             if ((unsigned char) val != prev_val) {
                 DTABS("tab_change_channel: change to tab %d\n", tab_list[val]);
@@ -160,7 +161,10 @@ static void tab_switch_task(struct timer *t, void *d)
             }
             break;
         case SW_MODE_TOGGLE:
-            val = get_sw_state(cfg);
+            val = get_sw_state(cfg, &ch_age);
+            if (ch_age > 2000)
+                break;
+
             if (val < 50)
                 val = 1;
             else
@@ -201,7 +205,7 @@ static void tab_switch_task(struct timer *t, void *d)
             break;
         case SW_MODE_FLIGHTMODE:
         {
-            mavlink_heartbeat_t *hb = mavdata_get(MAVDATA_HEARTBEAT);
+            mavlink_heartbeat_t *hb = mavdata_get(MAVLINK_MSG_ID_HEARTBEAT);
             unsigned char i;
             const unsigned char mode_ignore_list[] = {
                 PLANE_MODE_CIRCLE, PLANE_MODE_AUTO,
@@ -290,7 +294,7 @@ static void shell_cmd_config(char *args, void *data)
 
     t = shell_arg_parser(args, argval, SHELL_CMD_CONFIG_ARGS);
     if (t < 1) {
-        shell_printf("\nTab switch config:\n");
+        shell_printf("Tab switch config:\n");
         shell_printf(" Mode: %d (0:ch percent; 1:flight mode; 2:ch toggle)\n", cfg->mode);
         shell_printf(" Ch:   CH%d\n", cfg->ch + 1);
         shell_printf(" Min:  %d\n", cfg->ch_min);
@@ -342,21 +346,21 @@ static void shell_cmd_load(char *args, void *data)
     idx = shell_get_argval(argval, 'i');
     tab = shell_get_argval(argval, 't');
     if ((t != 1) && ((idx == NULL) && (tab == NULL))) {
-        shell_printf("\nload tab: [-i <tab index> | -t <tab number>]\n");
+        shell_printf("load tab: [-i <tab index> | -t <tab number>]\n");
         shell_printf(" -i <tab index>   tab index (0 to %d)\n", tab_list[0]-1);
         shell_printf(" -t <tab id>      tab id\n");
     } else {
         if (idx != NULL) {
             j = atoi(idx->val);
             if (j < tab_list[0]) {
-                shell_printf("\nLoading tab index %d of %d\n", j, tab_list[0]-1);
+                shell_printf("Loading tab index %d of %d\n", j, tab_list[0]-1);
                 load_tab(tab_list[j+1]);
             } else {
-                shell_printf("\nOut of range [0 ... %d]\n", tab_list[0]-1);
+                shell_printf("Out of range [0 ... %d]\n", tab_list[0]-1);
             }
         } else {
             j = atoi(tab->val);
-            shell_printf("\nLoading tab id %d\n", j);
+            shell_printf("Loading tab id %d\n", j);
             load_tab(j);
         }
     }

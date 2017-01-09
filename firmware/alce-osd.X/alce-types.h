@@ -16,26 +16,18 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _UAV_H
-#define	_UAV_H
+#ifndef ALCE_TYPES_H
+#define	ALCE_TYPES_H
 
-struct mavdata_state {
-    void *data;
-    unsigned long time;
-    unsigned long period;
+typedef unsigned char u8;
+typedef unsigned int u16;
+typedef unsigned long u32;
+typedef unsigned long long u64;
 
-    void (*decode)(mavlink_message_t *msg, void *d);
-    const mavlink_message_info_t *info;
-    int info_pag;
-};
+typedef char s8;
+typedef int s16;
+typedef long s32;
+typedef long long s64;
 
-void mavdata_init(void);
-void mavdata_store(mavlink_message_t *msg);
-void* mavdata_get(unsigned int id);
-unsigned long mavdata_time(unsigned int id);
-unsigned long mavdata_age(unsigned int id);
-unsigned long mavdata_period(unsigned int id);
 
-void shell_cmd_mavdata(char *args, void *data);
-
-#endif
+#endif /* ALCE_TYPES_H */
